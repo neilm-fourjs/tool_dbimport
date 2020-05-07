@@ -1,9 +1,7 @@
 IMPORT os
 IMPORT util
 
--- Do a commit every C_COMMIT rows
-CONSTANT C_COMMIT = 1000
-
+-- Do a commit every m_cfg.commit rows
 DEFINE m_dbn STRING
 DEFINE m_sql STRING
 DEFINE m_creTab BOOLEAN = FALSE
@@ -22,16 +20,20 @@ DEFINE m_file STRING
 DEFINE m_rows, m_cols, m_size INTEGER
 DEFINE m_logFile STRING
 
-DEFINE m_drop BOOLEAN = FALSE
-DEFINE m_create BOOLEAN = FALSE
-DEFINE m_load BOOLEAN = FALSE
-DEFINE m_dropIdx BOOLEAN = FALSE
-DEFINE m_indexes BOOLEAN = FALSE
+DEFINE m_cfg RECORD
+	commit SMALLINT,
+	drop BOOLEAN,
+	create BOOLEAN,
+	load BOOLEAN,
+	dropIdx BOOLEAN,
+	indexes BOOLEAN
+END RECORD
 
 DEFINE m_start, m_end DATETIME YEAR TO SECOND
 
 MAIN
 	DEFINE x SMALLINT
+	DEFINE l_imported INTEGER = 0
 
 	LET m_dbn = ARG_VAL(1)
 
@@ -50,12 +52,21 @@ MAIN
 		EXIT PROGRAM
 	END TRY
 
+	LET m_cfg.commit = 1000
+	LET m_cfg.drop = FALSE
+	LET m_cfg.create = FALSE
+	LET m_cfg.load = FALSE
+	LET m_cfg.dropIdx = FALSE
+	LET m_cfg.indexes = FALSE
+	CALL loadCfg()
+
 	LET m_start = CURRENT
-	CALL disp("Drop Tables: "||IIF(m_drop,"Yes","No"))
-	CALL disp("Create Tables: "||IIF(m_create,"Yes","No"))
-	CALL disp("Load data: "||IIF(m_load,"Yes","No"))
-	CALL disp("Drop Indexes: "||IIF(m_dropIdx,"Yes","No"))
-	CALL disp("Create Indexes: "||IIF(m_indexes,"Yes","No"))
+	CALL disp("Commit: "||m_cfg.commit)
+	CALL disp("Drop Tables: "||IIF(m_cfg.drop,"Yes","No"))
+	CALL disp("Create Tables: "||IIF(m_cfg.create,"Yes","No"))
+	CALL disp("Load data: "||IIF(m_cfg.load,"Yes","No"))
+	CALL disp("Drop Indexes: "||IIF(m_cfg.dropIdx,"Yes","No"))
+	CALL disp("Create Indexes: "||IIF(m_cfg.indexes,"Yes","No"))
 
 	CALL procSQL(SFMT("%1.exp/%2.sql", m_dbn, m_dbn))
 
@@ -69,6 +80,14 @@ MAIN
 						(m_tabs[x].size USING "<<<,<<<,<<&M")))
 		IF m_tabs[x].rows > 0 THEN
 			CALL load(x)
+			IF m_cfg.load THEN
+				LET l_imported = l_imported + m_tabs[x].size
+			END IF
+		END IF
+		IF l_imported > 200 THEN -- force a checkpoint every 200MB to try and stop DB from stalling 
+			CALL disp("Doing check point")
+			RUN "onmode -c"
+			LET l_imported = 0
 		END IF
 	END FOR
 
@@ -160,7 +179,7 @@ FUNCTION procSQLLine(l_line STRING)
 	IF l_line.subString(1, 12) = "create table" THEN
 		LET m_sql = SFMT("drop table %1;", m_tabName)
 		CALL disp(m_sql)
-		CALL doSQL(m_drop)
+		CALL doSQL(m_cfg.drop)
 		LET m_creTab = TRUE
 		LET m_creIdx = FALSE
 		LET m_sql = l_line
@@ -176,7 +195,7 @@ FUNCTION procSQLLine(l_line STRING)
 		END IF
 		LET m_sql = SFMT("drop index %1;", m_idxName)
 		CALL disp(m_sql)
-		CALL doSQL(m_dropIdx)
+		CALL doSQL(m_cfg.dropIdx)
 		LET m_sql = stripOwner(l_line)
 		LET m_creTab = FALSE
 		LET m_creIdx = TRUE
@@ -188,11 +207,11 @@ FUNCTION procSQLLine(l_line STRING)
 	LET x = l_line.getIndexOf(";", 1)
 	IF x > 0 THEN
 		IF m_creTab THEN
-			CALL doSQL(m_create)
+			CALL doSQL(m_cfg.create)
 			LET m_creTab = FALSE
 		END IF
 		IF m_creIdx THEN
-			CALL doSQL(m_indexes)
+			CALL doSQL(m_cfg.indexes)
 			LET m_creIdx = FALSE
 		END IF
 	END IF
@@ -243,18 +262,33 @@ FUNCTION load(x SMALLINT)
 	LET l_file = SFMT("%1.exp/%2.load", m_dbn, m_tabs[x].tabName)
 	LET l_logFile = SFMT("%1.exp/%2.log", m_dbn, m_tabs[x].tabName)
 	LET l_outFile = SFMT("%1.exp/%2.out", m_dbn, m_tabs[x].tabName)
-	LET l_cmd = SFMT("dbload -d %1 -k -c %2 -n %3 -l %4 > %5", m_dbn, l_file, C_COMMIT, l_logFile, l_outFile)
+	LET l_cmd = SFMT("dbload -d %1 -k -c %2 -n %3 -l %4 > %5", m_dbn, l_file, m_cfg.commit, l_logFile, l_outFile)
 	LET c = base.Channel.create()
 	CALL c.openFile(l_file, "w")
 	LET l_line =
 			SFMT("FILE \"%1\" DELIMITER '|' %2;\n\tINSERT INTO %3;", m_tabs[x].dataFile, m_tabs[x].cols, m_tabs[x].tabName)
 	CALL c.writeLine(l_line)
 	CALL c.close()
-	IF m_load THEN
+	IF m_cfg.load THEN
 --		CALL disp(l_cmd)
 		RUN l_cmd
 		LET l_cmd = "tail -1 ", l_outFile
 		RUN l_cmd
 	END IF
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION loadCfg()
+	DEFINE l_file STRING
+	DEFINE l_data TEXT
+	LET l_file = m_dbn||".cfg"
+	LOCATE l_data IN FILE l_file
+	IF NOT os.path.exists(l_file) THEN
+		CALL disp(SFMT("Creating %1 ...", l_file))
+		LET l_data = util.JSON.stringify( m_cfg )
+		EXIT PROGRAM
+	ELSE
+		CALL disp(SFMT("Loading %1 ...", l_file))
+	END IF
+	CALL util.JSON.parse( l_data, m_cfg )
 END FUNCTION
 --------------------------------------------------------------------------------
