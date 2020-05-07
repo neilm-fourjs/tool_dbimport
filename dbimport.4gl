@@ -2,7 +2,7 @@ IMPORT os
 IMPORT util
 
 -- Do a commit every m_cfg.commit rows
-DEFINE m_dbn STRING
+DEFINE m_dbsource STRING
 DEFINE m_sql STRING
 DEFINE m_creTab BOOLEAN = FALSE
 DEFINE m_creIdx BOOLEAN = FALSE
@@ -21,12 +21,15 @@ DEFINE m_rows, m_cols, m_size INTEGER
 DEFINE m_logFile STRING
 
 DEFINE m_cfg RECORD
+	targetdbn STRING,
+	targettyp CHAR(3),
 	commit SMALLINT,
 	drop BOOLEAN,
 	create BOOLEAN,
 	load BOOLEAN,
 	dropIdx BOOLEAN,
-	indexes BOOLEAN
+	indexes BOOLEAN,
+	updstats BOOLEAN
 END RECORD
 
 DEFINE m_start, m_end DATETIME YEAR TO SECOND
@@ -35,40 +38,57 @@ MAIN
 	DEFINE x SMALLINT
 	DEFINE l_imported INTEGER = 0
 
-	LET m_dbn = ARG_VAL(1)
+	LET m_dbsource = ARG_VAL(1)
 
-	IF NOT os.path.exists(m_dbn || ".exp") THEN
-		DISPLAY "No " || m_dbn || ".exp here!"
+	IF NOT os.path.exists(m_dbsource || ".exp") THEN
+		DISPLAY "No " || m_dbsource || ".exp here!"
 		EXIT PROGRAM
 	END IF
 
-	LET m_logFile = m_dbn||"_"||(util.Datetime.format( CURRENT, "%Y%m%d%H%M" ))||".log"
+	LET m_logFile = m_dbsource||"_"||(util.Datetime.format( CURRENT, "%Y%m%d%H%M" ))||".log"
 
-	TRY
-		CALL disp(SFMT("Database: %1",m_dbn))
-		DATABASE m_dbn
-	CATCH
-		CALL disp(SQLERRMESSAGE)
-		EXIT PROGRAM
-	END TRY
-
+	LET m_cfg.targetdbn = m_dbsource
+	LET m_cfg.targettyp = "ifx"
 	LET m_cfg.commit = 1000
 	LET m_cfg.drop = FALSE
 	LET m_cfg.create = FALSE
 	LET m_cfg.load = FALSE
 	LET m_cfg.dropIdx = FALSE
 	LET m_cfg.indexes = FALSE
+	LET m_cfg.updstats = FALSE
 	CALL loadCfg()
+
+	IF m_cfg.targetTyp = "sqt" THEN
+		IF NOT os.path.exists( m_cfg.targetdbn ) THEN
+			CALL disp(SFMT("Create Database: %1",m_cfg.targetdbn))
+			TRY
+				CREATE DATABASE m_cfg.targetdbn
+			CATCH
+				CALL disp(SQLERRMESSAGE)
+				EXIT PROGRAM
+			END TRY
+		END IF
+	END IF
+
+	TRY
+		CALL disp(SFMT("Database: %1",m_cfg.targetdbn))
+		DATABASE m_cfg.targetdbn
+	CATCH
+		CALL disp(SFMT("Connect failed: %1",SQLERRMESSAGE))
+		EXIT PROGRAM
+	END TRY
 
 	LET m_start = CURRENT
 	CALL disp("Commit: "||m_cfg.commit)
+	CALL disp("Target DB Name: "||m_cfg.targetdbn)
+	CALL disp("Target DB Type: "||m_cfg.targettyp)
 	CALL disp("Drop Tables: "||IIF(m_cfg.drop,"Yes","No"))
 	CALL disp("Create Tables: "||IIF(m_cfg.create,"Yes","No"))
 	CALL disp("Load data: "||IIF(m_cfg.load,"Yes","No"))
 	CALL disp("Drop Indexes: "||IIF(m_cfg.dropIdx,"Yes","No"))
 	CALL disp("Create Indexes: "||IIF(m_cfg.indexes,"Yes","No"))
 
-	CALL procSQL(SFMT("%1.exp/%2.sql", m_dbn, m_dbn))
+	CALL procSQL(SFMT("%1.exp/%2.sql", m_dbsource, m_dbsource))
 
 	CALL m_tabs.sort("size", FALSE)
 	FOR x = 1 TO m_tabs.getLength()
@@ -79,17 +99,27 @@ MAIN
 						(m_tabs[x].rowsize USING "<<,<<<,<<<,<<&"),
 						(m_tabs[x].size USING "<<<,<<<,<<&M")))
 		IF m_tabs[x].rows > 0 THEN
-			CALL load(x)
+			CASE m_cfg.targettyp
+				WHEN "ifx" CALL loadIfx(x)
+				OTHERWISE
+					CALL load(x)	
+			END CASE
 			IF m_cfg.load THEN
 				LET l_imported = l_imported + m_tabs[x].size
 			END IF
 		END IF
-		IF l_imported > 200 THEN -- force a checkpoint every 200MB to try and stop DB from stalling 
+		IF m_cfg.targettyp = "ifx" AND l_imported > 200 THEN -- force a checkpoint every 200MB to try and stop DB from stalling 
 			CALL disp("Doing check point")
 			RUN "onmode -c"
 			LET l_imported = 0
 		END IF
 	END FOR
+
+	IF m_cfg.updstats THEN
+		CALL disp("Update statistics - running")
+		EXECUTE IMMEDIATE "update statistics"
+		CALL disp("Update statistics - done")
+	END IF
 
 	LET m_end = CURRENT
 	CALL disp(SFMT("Finished - %1", m_end - m_start))
@@ -168,7 +198,7 @@ FUNCTION procSQLLine(l_line STRING)
 		LET m_rows = l_line.subString(x + 2, y - 1)
 		LET m_tabs[m_tabs.getLength()].rows = m_rows
 		LET m_tabs[m_tabs.getLength()].size = ((m_size * m_rows) / 1024) / 1000 -- calc MB
-		LET m_tabs[m_tabs.getLength()].dataFile = SFMT("%1.exp/%2", m_dbn, m_file)
+		LET m_tabs[m_tabs.getLength()].dataFile = SFMT("%1.exp/%2", m_dbsource, m_file)
 	END IF
 
 	IF l_line.getCharAt(1) = "{" THEN
@@ -182,7 +212,7 @@ FUNCTION procSQLLine(l_line STRING)
 		CALL doSQL(m_cfg.drop)
 		LET m_creTab = TRUE
 		LET m_creIdx = FALSE
-		LET m_sql = l_line
+		LET m_sql = "CREATE TABLE ",m_tabName
 		RETURN
 	END IF
 
@@ -202,7 +232,7 @@ FUNCTION procSQLLine(l_line STRING)
 		RETURN
 	END IF
 
-	LET m_sql = m_sql.append(l_line)
+	LET m_sql = m_sql.append(" "||l_line)
 
 	LET x = l_line.getIndexOf(";", 1)
 	IF x > 0 THEN
@@ -247,22 +277,39 @@ FUNCTION doSQL(doIt BOOLEAN)
 	END IF
 END FUNCTION
 --------------------------------------------------------------------------------
-FUNCTION load(x SMALLINT)
-	DEFINE l_cmd STRING
-	DEFINE l_file, l_logFile, l_outFile, l_line STRING
-	DEFINE c base.Channel
+FUNCTION chkData(x SMALLINT)
+	DEFINE l_line STRING
 	DEFINE i INTEGER
 	LET l_line = "SELECT COUNT(*) FROM " || m_tabs[x].tabName
 	PREPARE pre FROM l_line
 	EXECUTE pre INTO i
+	RETURN i
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION load(x SMALLINT)
+	DEFINE l_sql STRING
+	DEFINE i INTEGER
+	LET i = chkData(x)
 	IF i > 0 THEN
 		CALL disp(m_tabs[x].tabName || " - Already has data - " || i)
 		RETURN
 	END IF
-	LET l_file = SFMT("%1.exp/%2.load", m_dbn, m_tabs[x].tabName)
-	LET l_logFile = SFMT("%1.exp/%2.log", m_dbn, m_tabs[x].tabName)
-	LET l_outFile = SFMT("%1.exp/%2.out", m_dbn, m_tabs[x].tabName)
-	LET l_cmd = SFMT("dbload -d %1 -k -c %2 -n %3 -l %4 > %5", m_dbn, l_file, m_cfg.commit, l_logFile, l_outFile)
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION loadIFX(x SMALLINT)
+	DEFINE l_cmd STRING
+	DEFINE l_file, l_logFile, l_outFile, l_line STRING
+	DEFINE c base.Channel
+	DEFINE i INTEGER
+	LET i = chkData(x)
+	IF i > 0 THEN
+		CALL disp(m_tabs[x].tabName || " - Already has data - " || i)
+		RETURN
+	END IF
+	LET l_file = SFMT("%1.exp/%2.load", m_dbsource, m_tabs[x].tabName)
+	LET l_logFile = SFMT("%1.exp/%2.log", m_dbsource, m_tabs[x].tabName)
+	LET l_outFile = SFMT("%1.exp/%2.out", m_dbsource, m_tabs[x].tabName)
+	LET l_cmd = SFMT("dbload -d %1 -k -c %2 -n %3 -l %4 > %5", m_dbsource, l_file, m_cfg.commit, l_logFile, l_outFile)
 	LET c = base.Channel.create()
 	CALL c.openFile(l_file, "w")
 	LET l_line =
@@ -280,7 +327,7 @@ END FUNCTION
 FUNCTION loadCfg()
 	DEFINE l_file STRING
 	DEFINE l_data TEXT
-	LET l_file = m_dbn||".cfg"
+	LET l_file = m_dbsource||".cfg"
 	LOCATE l_data IN FILE l_file
 	IF NOT os.path.exists(l_file) THEN
 		CALL disp(SFMT("Creating %1 ...", l_file))
