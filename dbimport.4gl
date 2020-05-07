@@ -12,7 +12,7 @@ DEFINE m_tabs DYNAMIC ARRAY OF RECORD
 	dataFile STRING,
 	rowsize INTEGER,
 	rows INTEGER,
-	size INTEGER
+	size DECIMAL(20,2)
 END RECORD
 DEFINE m_tabName STRING
 DEFINE m_idxName STRING
@@ -97,7 +97,7 @@ MAIN
 						x, m_tabs.getLength(), m_tabs[x].tabName, m_tabs[x].cols, m_tabs[x].dataFile, 
 						(m_tabs[x].rows USING "<<<,<<<,<<&"), 
 						(m_tabs[x].rowsize USING "<<,<<<,<<<,<<&"),
-						(m_tabs[x].size USING "<<<,<<<,<<&M")))
+						(m_tabs[x].size USING "<<<,<<<,<<&.&&M")))
 		IF m_tabs[x].rows > 0 THEN
 			CASE m_cfg.targettyp
 				WHEN "ifx" CALL loadIfx(x)
@@ -116,9 +116,7 @@ MAIN
 	END FOR
 
 	IF m_cfg.updstats THEN
-		CALL disp("Update statistics - running")
-		EXECUTE IMMEDIATE "update statistics"
-		CALL disp("Update statistics - done")
+		CALL updateStats()
 	END IF
 
 	LET m_end = CURRENT
@@ -241,9 +239,18 @@ FUNCTION procSQLLine(l_line STRING)
 			LET m_creTab = FALSE
 		END IF
 		IF m_creIdx THEN
+			CALL removeBtree()
 			CALL doSQL(m_cfg.indexes)
 			LET m_creIdx = FALSE
 		END IF
+	END IF
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION removeBtree()
+	DEFINE x SMALLINT
+	LET x = m_sql.getIndexOf("using btree",1) 
+	IF x > 0 THEN
+		LET m_sql = m_sql.subString(1,x-1)||";"
 	END IF
 END FUNCTION
 --------------------------------------------------------------------------------
@@ -263,15 +270,16 @@ FUNCTION stripOwner(l_line STRING)
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION doSQL(doIt BOOLEAN)
+	DEFINE l_start DATETIME YEAR TO SECOND
 	IF doIt THEN
+		LET l_start = CURRENT
 		CALL disp("Execute:" || m_sql)
 		TRY
 			EXECUTE IMMEDIATE m_sql
-			CALL disp("Okay")
+			CALL disp(SFMT("Okay: %1", (CURRENT - l_start)))
 		CATCH
-			CALL disp(SQLERRMESSAGE)
+			CALL disp(SFMT("Failed: %1",SQLERRMESSAGE))
 		END TRY
-		CALL disp("")
 	ELSE
 		CALL disp("Skipping: " || m_sql)
 	END IF
@@ -294,6 +302,19 @@ FUNCTION load(x SMALLINT)
 		CALL disp(m_tabs[x].tabName || " - Already has data - " || i)
 		RETURN
 	END IF
+-- How would load ( in a completely dynamic way ) into sqlite & postgresql ?
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION updateStats()
+	DEFINE x SMALLINT
+	FOR x = 1 TO m_tabs.getLength()
+		CASE m_cfg.targettyp
+			WHEN "ifx" LET m_sql = "UPDATE STATISTICS MEDIUM FOR TABLE "||m_tabs[x].tabName
+			OTHERWISE
+				LET m_sql = "ANALYZE "||m_tabs[x].tabName
+		END CASE
+		CALL doSQL(TRUE)
+	END FOR
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION loadIFX(x SMALLINT)

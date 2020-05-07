@@ -1,6 +1,7 @@
 # Automatic Makefile made by make4js by N.J.M.
 
 export DBDATE=DMY4/
+export FGLPROFILE=./fglprofile
 
 fgl_obj1 =  \
 	 dbimport.$(4GLOBJ)
