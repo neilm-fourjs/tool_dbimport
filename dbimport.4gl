@@ -100,9 +100,8 @@ MAIN
 						(m_tabs[x].size USING "<<<,<<<,<<&.&&M")))
 		IF m_tabs[x].rows > 0 THEN
 			CASE m_cfg.targettyp
-				WHEN "ifx" CALL loadIfx(x)
-				OTHERWISE
-					CALL load(x)	
+				WHEN "ifx" CALL loadIFX(x)
+				WHEN "sqt" CALL loadSQT(x)
 			END CASE
 			IF m_cfg.load THEN
 				LET l_imported = l_imported + m_tabs[x].size
@@ -294,17 +293,6 @@ FUNCTION chkData(x SMALLINT)
 	RETURN i
 END FUNCTION
 --------------------------------------------------------------------------------
-FUNCTION load(x SMALLINT)
-	DEFINE l_sql STRING
-	DEFINE i INTEGER
-	LET i = chkData(x)
-	IF i > 0 THEN
-		CALL disp(m_tabs[x].tabName || " - Already has data - " || i)
-		RETURN
-	END IF
--- How would load ( in a completely dynamic way ) into sqlite & postgresql ?
-END FUNCTION
---------------------------------------------------------------------------------
 FUNCTION updateStats()
 	DEFINE x SMALLINT
 	FOR x = 1 TO m_tabs.getLength()
@@ -315,6 +303,31 @@ FUNCTION updateStats()
 		END CASE
 		CALL doSQL(TRUE)
 	END FOR
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION loadSQT(x SMALLINT)
+	DEFINE l_file, l_outFile, l_line, l_cmd STRING
+	DEFINE i INTEGER
+	DEFINE c base.Channel
+	LET i = chkData(x)
+	IF i > 0 THEN
+		CALL disp(m_tabs[x].tabName || " - Already has data - " || i)
+		RETURN
+	END IF
+	LET l_file = SFMT("%1.exp/%2.load", m_dbsource, m_tabs[x].tabName)
+	LET l_outFile = SFMT("%1.exp/%2.out", m_dbsource, m_tabs[x].tabName)
+	LET c = base.Channel.create()
+	CALL c.openFile(l_file, "w")
+	LET l_line = SFMT(".separator '|'\n.import '%1' %2", m_tabs[x].dataFile, m_tabs[x].tabName)
+	CALL c.writeLine(l_line)
+	CALL c.close()
+	LET l_cmd = SFMT("cat %1 | sqlite3 %2 > %3 2>&1", l_file, m_cfg.targetdbn, l_outFile)
+	IF m_cfg.load THEN
+		RUN l_cmd
+	END IF
+	LET i = chkData(x)
+	CALL disp(SFMT("%1 has %2 rows.",m_tabs[x].tabName, i))
+	
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION loadIFX(x SMALLINT)
@@ -330,13 +343,13 @@ FUNCTION loadIFX(x SMALLINT)
 	LET l_file = SFMT("%1.exp/%2.load", m_dbsource, m_tabs[x].tabName)
 	LET l_logFile = SFMT("%1.exp/%2.log", m_dbsource, m_tabs[x].tabName)
 	LET l_outFile = SFMT("%1.exp/%2.out", m_dbsource, m_tabs[x].tabName)
-	LET l_cmd = SFMT("dbload -d %1 -k -c %2 -n %3 -l %4 > %5", m_dbsource, l_file, m_cfg.commit, l_logFile, l_outFile)
 	LET c = base.Channel.create()
 	CALL c.openFile(l_file, "w")
 	LET l_line =
 			SFMT("FILE \"%1\" DELIMITER '|' %2;\n\tINSERT INTO %3;", m_tabs[x].dataFile, m_tabs[x].cols, m_tabs[x].tabName)
 	CALL c.writeLine(l_line)
 	CALL c.close()
+	LET l_cmd = SFMT("dbload -d %1 -k -c %2 -n %3 -l %4 > %5", m_dbsource, l_file, m_cfg.commit, l_logFile, l_outFile)
 	IF m_cfg.load THEN
 --		CALL disp(l_cmd)
 		RUN l_cmd
