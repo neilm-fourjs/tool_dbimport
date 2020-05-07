@@ -206,7 +206,7 @@ FUNCTION procSQLLine(l_line STRING)
 	IF l_line.subString(1, 12) = "create table" THEN
 		LET m_sql = SFMT("drop table %1;", m_tabName)
 		CALL disp(m_sql)
-		CALL doSQL(m_cfg.drop)
+		CALL doSQL(m_cfg.drop, 0)
 		LET m_creTab = TRUE
 		LET m_creIdx = FALSE
 		LET m_sql = "CREATE TABLE ",m_tabName
@@ -222,7 +222,7 @@ FUNCTION procSQLLine(l_line STRING)
 		END IF
 		LET m_sql = SFMT("drop index %1;", m_idxName)
 		CALL disp(m_sql)
-		CALL doSQL(m_cfg.dropIdx)
+		CALL doSQL(m_cfg.dropIdx, 0)
 		LET m_sql = stripOwner(l_line)
 		LET m_creTab = FALSE
 		LET m_creIdx = TRUE
@@ -234,12 +234,12 @@ FUNCTION procSQLLine(l_line STRING)
 	LET x = l_line.getIndexOf(";", 1)
 	IF x > 0 THEN
 		IF m_creTab THEN
-			CALL doSQL(m_cfg.create)
+			CALL doSQL(m_cfg.create, 0)
 			LET m_creTab = FALSE
 		END IF
 		IF m_creIdx THEN
 			CALL removeBtree()
-			CALL doSQL(m_cfg.indexes)
+			CALL doSQL(m_cfg.indexes, 0)
 			LET m_creIdx = FALSE
 		END IF
 	END IF
@@ -268,11 +268,17 @@ FUNCTION stripOwner(l_line STRING)
 	RETURN l_newLine
 END FUNCTION
 --------------------------------------------------------------------------------
-FUNCTION doSQL(doIt BOOLEAN)
+FUNCTION doSQL(doIt BOOLEAN, l_cnt SMALLINT)
 	DEFINE l_start DATETIME YEAR TO SECOND
+	DEFINE l_line STRING
 	IF doIt THEN
 		LET l_start = CURRENT
-		CALL disp("Execute:" || m_sql)
+		IF l_cnt > 0 THEN
+			LET l_line = SFMT("%1 of %2 - Execute: %1",l_cnt, m_tabs.getLength(), m_sql)
+		ELSE
+			LET l_line = SFMT("Execute: %1",m_sql)
+		END IF
+		CALL disp(l_line)
 		TRY
 			EXECUTE IMMEDIATE m_sql
 			CALL disp(SFMT("Okay: %1", (CURRENT - l_start)))
@@ -301,7 +307,7 @@ FUNCTION updateStats()
 			OTHERWISE
 				LET m_sql = "ANALYZE "||m_tabs[x].tabName
 		END CASE
-		CALL doSQL(TRUE)
+		CALL doSQL(TRUE,x)
 	END FOR
 END FUNCTION
 --------------------------------------------------------------------------------
