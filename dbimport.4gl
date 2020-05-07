@@ -1,4 +1,5 @@
 IMPORT os
+IMPORT util
 
 -- Do a commit every C_COMMIT rows
 CONSTANT C_COMMIT = 1000
@@ -19,12 +20,15 @@ DEFINE m_tabName STRING
 DEFINE m_idxName STRING
 DEFINE m_file STRING
 DEFINE m_rows, m_cols, m_size INTEGER
+DEFINE m_logFile STRING
 
 DEFINE m_drop BOOLEAN = FALSE
 DEFINE m_create BOOLEAN = FALSE
-DEFINE m_load BOOLEAN = TRUE
+DEFINE m_load BOOLEAN = FALSE
 DEFINE m_dropIdx BOOLEAN = FALSE
 DEFINE m_indexes BOOLEAN = FALSE
+
+DEFINE m_start, m_end DATETIME YEAR TO SECOND
 
 MAIN
 	DEFINE x SMALLINT
@@ -36,6 +40,8 @@ MAIN
 		EXIT PROGRAM
 	END IF
 
+	LET m_logFile = m_dbn||"_"||(util.Datetime.format( CURRENT, "%Y%m%d%H%M" ))||".log"
+
 	TRY
 		CALL disp(SFMT("Database: %1",m_dbn))
 		DATABASE m_dbn
@@ -44,6 +50,13 @@ MAIN
 		EXIT PROGRAM
 	END TRY
 
+	LET m_start = CURRENT
+	CALL disp("Drop Tables: "||IIF(m_drop,"Yes","No"))
+	CALL disp("Create Tables: "||IIF(m_create,"Yes","No"))
+	CALL disp("Load data: "||IIF(m_load,"Yes","No"))
+	CALL disp("Drop Indexes: "||IIF(m_dropIdx,"Yes","No"))
+	CALL disp("Create Indexes: "||IIF(m_indexes,"Yes","No"))
+
 	CALL procSQL(SFMT("%1.exp/%2.sql", m_dbn, m_dbn))
 
 	CALL m_tabs.sort("size", FALSE)
@@ -51,18 +64,29 @@ MAIN
 		CALL disp(
 				SFMT("%1 of %2 - %3 Columns: %4 File: %5 Rows: %6 RowSize: %7 DataSize: %8",
 						x, m_tabs.getLength(), m_tabs[x].tabName, m_tabs[x].cols, m_tabs[x].dataFile, 
-						(m_tabs[x].rows USING "###,###,###"), 
-						(m_tabs[x].rowsize USING "##,###,###,###"),
-						(m_tabs[x].size USING "###,###,###M")))
+						(m_tabs[x].rows USING "<<<,<<<,<<&"), 
+						(m_tabs[x].rowsize USING "<<,<<<,<<<,<<&"),
+						(m_tabs[x].size USING "<<<,<<<,<<&M")))
 		IF m_tabs[x].rows > 0 THEN
 			CALL load(x)
 		END IF
 	END FOR
 
+	LET m_end = CURRENT
+	CALL disp(SFMT("Finished - %1", m_end - m_start))
 END MAIN
 --------------------------------------------------------------------------------
 FUNCTION disp(l_line STRING)
-	DISPLAY CURRENT, ":", l_line
+	DEFINE l_ts DATETIME YEAR TO SECOND
+	DEFINE l_log STRING
+	DEFINE c base.Channel
+	LET l_ts = CURRENT
+	LET l_log = l_ts, ") ", l_line
+	DISPLAY l_log
+	LET c = base.Channel.create()
+	CALL c.openFile(m_logFile, "a+")
+	CALL c.writeLine( l_log )
+	CALL c.close()
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION procSQL(l_file STRING)
@@ -112,8 +136,8 @@ FUNCTION procSQLLine(l_line STRING)
 		LET m_cols = l_line.subString(x + 2, y - 1)
 
 		LET m_tabs[m_tabs.getLength() + 1].tabName = m_tabName
-		LET m_tabs[m_tabs.getLength()].cols = m_cols
 		LET m_tabs[m_tabs.getLength()].rowsize = m_size
+		LET m_tabs[m_tabs.getLength()].cols = m_cols
 	END IF
 
 -- Get the unload file name and the number of rows.
@@ -227,11 +251,10 @@ FUNCTION load(x SMALLINT)
 	CALL c.writeLine(l_line)
 	CALL c.close()
 	IF m_load THEN
-		CALL disp(l_cmd)
+--		CALL disp(l_cmd)
 		RUN l_cmd
 		LET l_cmd = "tail -1 ", l_outFile
 		RUN l_cmd
-		DISPLAY ""
 	END IF
 END FUNCTION
 --------------------------------------------------------------------------------
