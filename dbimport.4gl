@@ -274,7 +274,7 @@ FUNCTION doSQL(doIt BOOLEAN, l_cnt SMALLINT)
 	IF doIt THEN
 		LET l_start = CURRENT
 		IF l_cnt > 0 THEN
-			LET l_line = SFMT("%1 of %2 - Execute: %1",l_cnt, m_tabs.getLength(), m_sql)
+			LET l_line = SFMT("%1 of %2 - Execute: %3",l_cnt, m_tabs.getLength(), m_sql)
 		ELSE
 			LET l_line = SFMT("Execute: %1",m_sql)
 		END IF
