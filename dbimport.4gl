@@ -102,6 +102,7 @@ MAIN
 			CASE m_cfg.targettyp
 				WHEN "ifx" CALL loadIFX(x)
 				WHEN "sqt" CALL loadSQT(x)
+				WHEN "pgs" CALL loadPGS(x)
 			END CASE
 			IF m_cfg.load THEN
 				LET l_imported = l_imported + m_tabs[x].size
@@ -311,8 +312,37 @@ FUNCTION updateStats()
 	END FOR
 END FUNCTION
 --------------------------------------------------------------------------------
+FUNCTION loadPGS(x SMALLINT)
+	DEFINE l_file, l_outFile, l_line, l_cmd, l_cmd2 STRING
+	DEFINE i INTEGER
+	DEFINE c base.Channel
+	LET i = chkData(x)
+	IF i > 0 THEN
+		CALL disp(m_tabs[x].tabName || " - Already has data - " || i)
+		RETURN
+	END IF
+	LET l_file = SFMT("%1.exp/%2.load", m_dbsource, m_tabs[x].tabName)
+	LET l_outFile = SFMT("%1.exp/%2.out", m_dbsource, m_tabs[x].tabName)
+	LET c = base.Channel.create()
+	CALL c.openFile(l_file, "w")
+	LET l_line = SFMT("COPY %1\nFROM '%2' DELIMITER '|'", m_tabs[x].tabName, os.path.join(os.path.pwd(),m_tabs[x].dataFile))
+	CALL c.writeLine(l_line)
+	CALL c.close()
+	LET l_cmd = SFMT("psql -d %1 < %2 > %3 2>&1", m_cfg.targetdbn, l_file, l_outFile)
+	CALL disp(l_cmd)
+	IF m_cfg.load THEN
+		-- have to remove the last | for the load to work.
+		LET l_cmd2 = SFMT("sed -i 's/|$//g' %1", m_tabs[x].dataFile)
+		RUN l_cmd2
+
+		RUN l_cmd
+	END IF
+	LET i = chkData(x)
+	CALL disp(SFMT("%1 has %2 rows.",m_tabs[x].tabName, i))
+END FUNCTION
+--------------------------------------------------------------------------------
 FUNCTION loadSQT(x SMALLINT)
-	DEFINE l_file, l_outFile, l_line, l_cmd STRING
+	DEFINE l_file, l_outFile, l_line, l_cmd, l_cmd2 STRING
 	DEFINE i INTEGER
 	DEFINE c base.Channel
 	LET i = chkData(x)
@@ -329,11 +359,14 @@ FUNCTION loadSQT(x SMALLINT)
 	CALL c.close()
 	LET l_cmd = SFMT("cat %1 | sqlite3 %2 > %3 2>&1", l_file, m_cfg.targetdbn, l_outFile)
 	IF m_cfg.load THEN
+		-- remove the last | for the load not to produce an error line for every row
+		LET l_cmd2 = SFMT("sed -i 's/|$//g' %1", m_tabs[x].dataFile)
+		RUN l_cmd2
+
 		RUN l_cmd
 	END IF
 	LET i = chkData(x)
 	CALL disp(SFMT("%1 has %2 rows.",m_tabs[x].tabName, i))
-	
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION loadIFX(x SMALLINT)

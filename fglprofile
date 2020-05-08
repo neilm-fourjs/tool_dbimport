@@ -1,3 +1,4 @@
 
-dbi.default.driver = "dbmsqt"
+dbi.default.driver = "dbmpgs"
+#dbi.default.driver = "dbmsqt"
 #dbi.default.driver = "dbmifx"
