@@ -31,11 +31,12 @@ DEFINE m_cfg RECORD
 	indexes BOOLEAN,
 	updstats BOOLEAN
 END RECORD
-
+DEFINE l_dbdriver STRING
 DEFINE m_start, m_end DATETIME YEAR TO SECOND
 
 MAIN
 	DEFINE x SMALLINT
+	DEFINE l_dbdriver STRING
 	DEFINE l_imported INTEGER = 0
 
 	LET m_dbsource = ARG_VAL(1)
@@ -58,6 +59,15 @@ MAIN
 	LET m_cfg.updstats = FALSE
 	CALL loadCfg()
 
+	LET l_dbdriver = fgl_getResource("dbi.default.driver")
+	LET l_dbdriver = l_dbdriver.subString(4,6)
+	
+	IF l_dbdriver != m_cfg.targettyp THEN
+		DISPLAY SFMT("DB Driver %1 not equal to targettyp %2 !", l_dbdriver, m_cfg.targettyp)
+		EXIT PROGRAM
+	END IF
+
+	CALL disp(SFMT("DB Driver: %1",l_dbdriver))
 	IF m_cfg.targetTyp = "sqt" THEN
 		IF NOT os.path.exists( m_cfg.targetdbn ) THEN
 			CALL disp(SFMT("Create Database: %1",m_cfg.targetdbn))
@@ -74,7 +84,7 @@ MAIN
 		CALL disp(SFMT("Database: %1",m_cfg.targetdbn))
 		DATABASE m_cfg.targetdbn
 	CATCH
-		CALL disp(SFMT("Connect failed: %1",SQLERRMESSAGE))
+		CALL disp(SFMT("Connect failed:%1: %2",m_cfg.targettyp,SQLERRMESSAGE))
 		EXIT PROGRAM
 	END TRY
 
