@@ -12,6 +12,7 @@ DEFINE m_tabs DYNAMIC ARRAY OF RECORD
 	dataFile STRING,
 	rowsize INTEGER,
 	rows INTEGER,
+	act_rows INTEGER,
 	size DECIMAL(20,2)
 END RECORD
 DEFINE m_tabName STRING
@@ -19,6 +20,7 @@ DEFINE m_idxName STRING
 DEFINE m_file STRING
 DEFINE m_rows, m_cols, m_size INTEGER
 DEFINE m_logFile STRING
+DEFINE m_idxs DYNAMIC ARRAY OF STRING
 
 DEFINE m_cfg RECORD
 	targetdbn STRING,
@@ -103,12 +105,13 @@ MAIN
 	CALL m_tabs.sort("size", FALSE)
 	FOR x = 1 TO m_tabs.getLength()
 		CALL disp(
-				SFMT("%1 of %2 - %3 Columns: %4 File: %5 Rows: %6 RowSize: %7 DataSize: %8",
+				SFMT("%1 of %2 - %3 Columns: %4 File: %5 Rows: %6 Act Rows: %7 RowSize: %8 DataSize: %9",
 						x, m_tabs.getLength(), m_tabs[x].tabName, m_tabs[x].cols, m_tabs[x].dataFile, 
 						(m_tabs[x].rows USING "<<<,<<<,<<&"), 
+						(m_tabs[x].act_rows USING "<<<,<<<,<<&"), 
 						(m_tabs[x].rowsize USING "<<,<<<,<<<,<<&"),
 						(m_tabs[x].size USING "<<<,<<<,<<&.&&M")))
-		IF m_tabs[x].rows > 0 THEN
+		IF m_tabs[x].act_rows > 0 THEN
 			CASE m_cfg.targettyp
 				WHEN "ifx" CALL loadIFX(x)
 				WHEN "sqt" CALL loadSQT(x)
@@ -124,6 +127,13 @@ MAIN
 			LET l_imported = 0
 		END IF
 	END FOR
+
+	IF m_cfg.indexes AND m_idxs.getLength() > 0 THEN
+		FOR x = 1 TO m_idxs.getLength()
+			LET m_sql = m_idxs[x]
+			CALL doSQL( TRUE, 0 )
+		END FOR
+	END IF
 
 	IF m_cfg.updstats THEN
 		CALL updateStats()
@@ -204,9 +214,11 @@ FUNCTION procSQLLine(l_line STRING)
 		LET x = l_line.getIndexOf("=", x)
 		LET y = l_line.getIndexOf(" ", x + 2)
 		LET m_rows = l_line.subString(x + 2, y - 1)
-		LET m_tabs[m_tabs.getLength()].rows = m_rows
-		LET m_tabs[m_tabs.getLength()].size = ((m_size * m_rows) / 1024) / 1000 -- calc MB
 		LET m_tabs[m_tabs.getLength()].dataFile = SFMT("%1.exp/%2", m_dbsource, m_file)
+		LET m_tabs[m_tabs.getLength()].rows = m_rows
+		LET m_rows = countRows( m_tabs[m_tabs.getLength()].dataFile )
+		LET m_tabs[m_tabs.getLength()].act_rows = m_rows
+		LET m_tabs[m_tabs.getLength()].size = ((m_size * m_rows) / 1024) / 1000 -- calc MB
 	END IF
 
 	IF l_line.getCharAt(1) = "{" THEN
@@ -250,7 +262,7 @@ FUNCTION procSQLLine(l_line STRING)
 		END IF
 		IF m_creIdx THEN
 			CALL removeBtree()
-			CALL doSQL(m_cfg.indexes, 0)
+			LET m_idxs[ m_idxs.getLength() + 1 ] = m_sql
 			LET m_creIdx = FALSE
 		END IF
 	END IF
@@ -405,6 +417,21 @@ FUNCTION loadIFX(x SMALLINT)
 		LET l_cmd = "tail -1 ", l_outFile
 		RUN l_cmd
 	END IF
+-- we tail the output file to show the number of rows loaded.
+--	LET i = chkData(x)
+--	CALL disp(SFMT("%1 has %2 rows.",m_tabs[x].tabName, i))
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION countRows( l_file STRING ) RETURNS INT
+	DEFINE c base.channel
+	DEFINE l_line STRING
+	DEFINE l_ret INT
+	LET c = base.channel.create()
+	CALL c.openPipe(SFMT("cat %1 | wc -l", l_file),"r")
+	LET l_line = c.readLine()	
+	CALL c.close()
+	LET l_ret = l_line
+	RETURN l_ret
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION loadCfg()
