@@ -1,4 +1,7 @@
 
 dbi.default.driver = "dbmpgs"
-#dbi.default.driver = "dbmsqt"
 #dbi.default.driver = "dbmifx"
+
+#dbi.default.driver = "dbmsqt"
+#dbi.database.njm_demo310.source = "njm_demo310.db"
+

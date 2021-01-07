@@ -69,6 +69,7 @@ MAIN
 		EXIT PROGRAM
 	END IF
 
+	CALL disp(SFMT("FGLPROFILE: %1", fgl_getEnv("FGLPROFILE")))
 	CALL disp(SFMT("DB Driver: %1",l_dbdriver))
 	IF m_cfg.targetTyp = "sqt" THEN
 		IF NOT os.path.exists( m_cfg.targetdbn ) THEN
@@ -100,6 +101,7 @@ MAIN
 	CALL disp("Drop Indexes: "||IIF(m_cfg.dropIdx,"Yes","No"))
 	CALL disp("Create Indexes: "||IIF(m_cfg.indexes,"Yes","No"))
 
+	CALL disp(SFMT("Processing: %1.exp/%2.sql ...", m_dbsource, m_dbsource))
 	CALL procSQL(SFMT("%1.exp/%2.sql", m_dbsource, m_dbsource))
 
 	CALL m_tabs.sort("size", FALSE)
@@ -131,7 +133,7 @@ MAIN
 	IF m_cfg.indexes AND m_idxs.getLength() > 0 THEN
 		FOR x = 1 TO m_idxs.getLength()
 			LET m_sql = m_idxs[x]
-			CALL doSQL( TRUE, 0 )
+			CALL doSQL(x, m_idxs.getLength(), TRUE )
 		END FOR
 	END IF
 
@@ -202,6 +204,7 @@ FUNCTION procSQLLine(l_line STRING)
 		LET y = l_line.getIndexOf(" ", x + 2)
 		LET m_cols = l_line.subString(x + 2, y - 1)
 
+-- Setup the m_tabs array for the table
 		LET m_tabs[m_tabs.getLength() + 1].tabName = m_tabName
 		LET m_tabs[m_tabs.getLength()].rowsize = m_size
 		LET m_tabs[m_tabs.getLength()].cols = m_cols
@@ -225,17 +228,17 @@ FUNCTION procSQLLine(l_line STRING)
 		RETURN
 	END IF
 
--- Setup the m_tabs array for the table - do the DROP
+-- do the DROPs
 	IF l_line.subString(1, 12) = "create table" THEN
 		LET m_sql = SFMT("drop table %1;", m_tabName)
-		CALL disp(m_sql)
-		CALL doSQL(m_cfg.drop, 0)
+		CALL doSQL(0, 0, m_cfg.drop)
 		LET m_creTab = TRUE
 		LET m_creIdx = FALSE
 		LET m_sql = "CREATE TABLE ",m_tabName
 		RETURN
 	END IF
 
+-- do Drop Indexes
 	IF l_line MATCHES "create*index*" THEN
 		LET x = l_line.getIndexOf("\"",1)
 		IF x > 1 THEN
@@ -244,8 +247,7 @@ FUNCTION procSQLLine(l_line STRING)
 			LET m_idxName = l_line.subString(x+1,y-1)
 		END IF
 		LET m_sql = SFMT("drop index %1;", m_idxName)
-		CALL disp(m_sql)
-		CALL doSQL(m_cfg.dropIdx, 0)
+		CALL doSQL(0, 0, m_cfg.dropIdx)
 		LET m_sql = stripOwner(l_line)
 		LET m_creTab = FALSE
 		LET m_creIdx = TRUE
@@ -257,9 +259,10 @@ FUNCTION procSQLLine(l_line STRING)
 	LET x = l_line.getIndexOf(";", 1)
 	IF x > 0 THEN
 		IF m_creTab THEN
-			CALL doSQL(m_cfg.create, 0)
+			CALL doSQL(0, 0, m_cfg.create)
 			LET m_creTab = FALSE
 		END IF
+-- Build index array
 		IF m_creIdx THEN
 			CALL removeBtree()
 			LET m_idxs[ m_idxs.getLength() + 1 ] = m_sql
@@ -279,25 +282,24 @@ END FUNCTION
 -- String the owner from the idx name and table name in a create index statement
 -- create index "fred".idx1 on "fred".mytab (key);
 FUNCTION stripOwner(l_line STRING)
-	DEFINE l_newLine STRING
-	DEFINE x,y SMALLINT
-	LET x = l_line.getIndexOf("\"",1)
-	LET l_newLine = l_line.subString(1,x-1) -- up to idx name
-	LET x = l_line.getIndexOf(".",x)
-	LET y = l_line.getIndexOf(" ",x)
-	LET l_newLine = l_newLine.append( l_line.subString(x+1, y-1) )
-	LET x = l_line.getIndexOf(".",y)
-	LET l_newLine = l_newLine.append( " ON "||l_line.subString(x+1, l_line.getLength()) ) -- the rest
-	RETURN l_newLine
+  DEFINE l_newLine STRING
+  DEFINE x, y SMALLINT
+  LET x = l_line.getIndexOf("\"",1)
+  IF x < 2 THEN RETURN l_line END IF -- no name to strip
+  LET l_newLine = l_line.subString(1,x-1) -- up to name
+  LET x = l_line.getIndexOf(".",x)
+  LET l_newLine = l_newLine.append( l_line.subString(x+1, l_line.getLength()) )
+	LET l_newLine = stripOwner(l_newLine) -- might have owner on both idxname and tabname
+  RETURN l_newLine
 END FUNCTION
 --------------------------------------------------------------------------------
-FUNCTION doSQL(doIt BOOLEAN, l_cnt SMALLINT)
+FUNCTION doSQL(x SMALLINT, m INTEGER, doIt BOOLEAN)
 	DEFINE l_start DATETIME YEAR TO SECOND
 	DEFINE l_line STRING
 	IF doIt THEN
 		LET l_start = CURRENT
-		IF l_cnt > 0 THEN
-			LET l_line = SFMT("%1 of %2 - Execute: %3",l_cnt, m_tabs.getLength(), m_sql)
+		IF m > 0 THEN
+			LET l_line = SFMT("%1 of %2 - Execute: %3", x, m, m_sql)
 		ELSE
 			LET l_line = SFMT("Execute: %1",m_sql)
 		END IF
@@ -309,7 +311,7 @@ FUNCTION doSQL(doIt BOOLEAN, l_cnt SMALLINT)
 			CALL disp(SFMT("Failed: %1",SQLERRMESSAGE))
 		END TRY
 	ELSE
-		CALL disp("Skipping: " || m_sql)
+--		CALL disp("Skipping: " || m_sql)
 	END IF
 END FUNCTION
 --------------------------------------------------------------------------------
@@ -317,8 +319,14 @@ FUNCTION chkData(x SMALLINT)
 	DEFINE l_line STRING
 	DEFINE i INTEGER
 	LET l_line = "SELECT COUNT(*) FROM " || m_tabs[x].tabName
-	PREPARE pre FROM l_line
-	EXECUTE pre INTO i
+	TRY
+		PREPARE pre FROM l_line
+		EXECUTE pre INTO i
+	CATCH
+		CALL disp(l_line)
+		CALL disp(SFMT("Failed: %1", SQLERRMESSAGE ))
+		EXIT PROGRAM
+	END TRY
 	RETURN i
 END FUNCTION
 --------------------------------------------------------------------------------
@@ -330,7 +338,7 @@ FUNCTION updateStats()
 			OTHERWISE
 				LET m_sql = "ANALYZE "||m_tabs[x].tabName
 		END CASE
-		CALL doSQL(TRUE,x)
+		CALL doSQL(x, m_tabs.getLength(), TRUE)
 	END FOR
 END FUNCTION
 --------------------------------------------------------------------------------
@@ -372,7 +380,7 @@ FUNCTION loadSQT(x SMALLINT)
 		CALL disp(m_tabs[x].tabName || " - Already has data - " || i)
 		RETURN
 	END IF
-	LET l_file = SFMT("%1.exp/%2.load", m_dbsource, m_tabs[x].tabName)
+	LET l_file = SFMT("%1.exp/%2.sqt", m_dbsource, m_tabs[x].tabName)
 	LET l_outFile = SFMT("%1.exp/%2.out", m_dbsource, m_tabs[x].tabName)
 	LET c = base.Channel.create()
 	CALL c.openFile(l_file, "w")
@@ -382,8 +390,8 @@ FUNCTION loadSQT(x SMALLINT)
 	LET l_cmd = SFMT("cat %1 | sqlite3 %2 > %3 2>&1", l_file, m_cfg.targetdbn, l_outFile)
 	IF m_cfg.load THEN
 		-- remove the last | for the load not to produce an error line for every row
-		LET l_cmd2 = SFMT("sed -i 's/|$//g' %1", m_tabs[x].dataFile)
-		RUN l_cmd2
+		--LET l_cmd2 = SFMT("sed -i 's/|$//g' %1", m_tabs[x].dataFile)
+		--RUN l_cmd2
 
 		RUN l_cmd
 	END IF
